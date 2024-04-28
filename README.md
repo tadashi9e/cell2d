@@ -24,6 +24,7 @@ options:
   -h, --help       show this help message and exit
   --width WIDTH    Field width
   --height HEIGHT  Field height
+  --size SIZE      Magnify cell size (default 1)
   --rule RULE      Rule (default rule is random)
   --loop LOOP      loop count
   --batch          batch mode (run without graphics)

@@ -47,22 +47,12 @@ class Field(object):
             [xp.asarray(xp.bool_(True))],
             default = xp.bool_(False))
     def mask(self) -> None:
-        m = []
-        for y in range(int(self._height / 3)):
-            m.append(xp.zeros(self._width, dtype = xp.bool_))
-        for y in range(int(self._height / 3)):
-            a = int(self._width / 3)
-            b = int(self._width / 3)
-            c = self._width - (a + b)
-            m.append(xp.concatenate((
-                xp.zeros(a, dtype = xp.bool_),
-                xp.ones(b, dtype = xp.bool_),
-                xp.zeros(c, dtype = xp.bool_))))
-        while len(m) < self._height:
-            m.append(xp.zeros(self._width, dtype = xp.bool_))
-        self._cells = xp.logical_and(self._cells, xp.array(m))
+        m = xp.zeros((self._height, self._width), dtype = xp.bool_)
+        m[(self._height // 3):(self._height * 2 // 3),
+          (self._width // 3):(self._width * 2 // 3)] = True
+        self._cells = xp.logical_and(self._cells, m)
                       
-    def get_current_bgr_image(self) -> Any:
+    def get_current_bgr_image(self, cell_size: int) -> Any:
         # Prev Current  BG
         # -----------------
         # F    F          0                       -> black
@@ -83,7 +73,11 @@ class Field(object):
             [xp.logical_or(self._cells, self._prev_cells)],
             [xp.asarray(xp.uint8(255))],
             default = xp.uint8(0))
-        img = xp.zeros([self._height, self._width, 3], dtype = xp.uint8)
+        if cell_size != 1:
+            bg = bg.repeat(cell_size, axis = 0).repeat(cell_size, axis = 1)
+            r = r.repeat(cell_size, axis = 0).repeat(cell_size, axis = 1)
+        img = xp.zeros([self._height * cell_size, self._width * cell_size, 3],
+                       dtype = xp.uint8)
         img[:,:,0] = bg
         img[:,:,1] = bg
         img[:,:,2] = r
@@ -177,7 +171,7 @@ class AnimationGIF(object):
     def make_gif(self) -> None:
         date = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         path = date + ".gif"
-        duration_time = int(1000.0 / self._fps)
+        duration_time = 1000 // self._fps
         print("duration:{}".format(duration_time))
         self.im_list[0].save(path,
                              save_all=True,
@@ -203,6 +197,8 @@ def main() -> None:
                         help = 'Field width (default 200)')
     parser.add_argument('--height', type = int, default = 200,
                         help = 'Field height (default 200)')
+    parser.add_argument('--size', type = int, default = 1,
+                        help = 'Magnify cell size (default 1)')
     parser.add_argument('--rule', type = str, default = '',
                         help = 'Rule (default rule is random)')
     parser.add_argument('--loop', type = int, default = 1000,
@@ -224,14 +220,14 @@ def main() -> None:
     field = Field(width, height, rule)
     field.init_random()
     field.mask()
-    bgr_img = field.get_current_bgr_image()
+    bgr_img = field.get_current_bgr_image(args.size)
     if args.animation:
         animation = Animation(width, height, 100,
                               outfile = args.rule + '.mp4')
     waiting = 10
     for n in range(loop):
         field.update_cells()
-        bgr_img = field.get_current_bgr_image()
+        bgr_img = field.get_current_bgr_image(args.size)
         if is_batch:
             continue
         cv2.imshow("Ceullular Automata", bgr_img)
