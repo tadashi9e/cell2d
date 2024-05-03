@@ -1,4 +1,21 @@
 # -*- coding: utf-8; mode:python -*-
+u'''
+Cellular automaton around von Neumann neighborhood.
+Each cell has a binary value of 0 or 1.
+
+This program determines the next step cell state {0, 1} for each state
+{0, 1} of the cells adjacent to the center (C) and in the
+east-west-south-north (EWSN) directions, given as a 32-bit C⊗W⊗S⊗E⊗N rule
+(for the given rule, if the corresponding bit for the current state is 1,
+the next step state is set to 1; otherwise, it's set to 0).
+
+Regarding the initial values, the peripheral parts are value 0,
+and the central part consists of cells with randomly chosen values
+from {0, 1}.
+
+A cell value of 0 is represented as black, a cell value of 1 as white,
+and if the cell value changed from the previous step, it is shown in red.
+'''
 import argparse
 import datetime
 import math
@@ -15,42 +32,40 @@ REG_S = 2  # South
 REG_W = 3  # West
 REG_C = 4  # Center
 
+# Veon Neumann neighborhood
+N = xp.array([
+    [0, 1, 0],
+    [0, 0, 0],
+    [0, 0, 0]], dtype = xp.uint8)
+E = xp.array([
+    [0, 0, 0],
+    [0, 0, 1],
+    [0, 0, 0]], dtype = xp.uint8)
+W = xp.array([
+    [0, 0, 0],
+    [1, 0, 0],
+    [0, 0, 0]], dtype = xp.uint8)
+S = xp.array([
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 1, 0]], dtype = xp.uint8)
+
 class Field(object):
     def __init__(self, width: int, height: int, rule: int):
         self._width = width
         self._height = height
         self._rule = rule
         # Cells
-        self._cells = xp.zeros((height, width), dtype = xp.bool_)
-        self._prev_cells = xp.zeros((height, width), dtype = xp.bool_)
-        # Veon Neumann neighborhood
-        self._n = xp.array([
-            [0, 1, 0],
-            [0, 0, 0],
-            [0, 0, 0]], dtype = xp.uint64)
-        self._e = xp.array([
-            [0, 0, 0],
-            [0, 0, 1],
-            [0, 0, 0]], dtype = xp.uint64)
-        self._w = xp.array([
-            [0, 0, 0],
-            [1, 0, 0],
-            [0, 0, 0]], dtype = xp.uint64)
-        self._s = xp.array([
-            [0, 0, 0],
-            [0, 0, 0],
-            [0, 1, 0]], dtype = xp.uint64)
+        self._cells = xp.zeros((height, width), dtype = xp.uint8)
+        self._prev_cells = xp.zeros((height, width), dtype = xp.uint8)
     def init_random(self) -> None:
-        self._cells = xp.select(
-            [xp.random.randint(
-                1 + 1, size = (self._height, self._width)) != 0],
-            [xp.asarray(xp.bool_(True))],
-            default = xp.bool_(False))
+        self._cells = xp.random.randint(
+            1 + 1, size = (self._height, self._width), dtype = xp.uint8)
     def mask(self) -> None:
-        m = xp.zeros((self._height, self._width), dtype = xp.bool_)
+        m = xp.zeros((self._height, self._width), dtype = xp.uint8)
         m[(self._height // 3):(self._height * 2 // 3),
-          (self._width // 3):(self._width * 2 // 3)] = True
-        self._cells = xp.logical_and(self._cells, m)
+          (self._width // 3):(self._width * 2 // 3)] = 1
+        self._cells *= m
                       
     def get_current_bgr_image(self, cell_size: int) -> Any:
         # Prev Current  BG
@@ -60,7 +75,7 @@ class Field(object):
         # T    F          0                       -> red
         # T    T        255 (cell is stable true) -> white
         bg = xp.select(
-            [xp.logical_and(self._cells, self._prev_cells)],
+            [self._cells * self._prev_cells != 0],
             [xp.asarray(xp.uint8(255))],
             default = xp.uint8(0))
         # Prev Current   R
@@ -70,7 +85,7 @@ class Field(object):
         # T    F        255 (cell changed)        -> red
         # T    T        255 (cell is stable true) -> white
         r = xp.select(
-            [xp.logical_or(self._cells, self._prev_cells)],
+            [self._cells + self._prev_cells != 0],
             [xp.asarray(xp.uint8(255))],
             default = xp.uint8(0))
         if cell_size != 1:
@@ -84,51 +99,33 @@ class Field(object):
         return xp.asnumpy(img)
     def update_cells(self) -> None:
         self._prev_cells = self._cells
-        icells = xp.select([self._cells], [xp.asarray(1)], default = 0)
-        r = (
-            # N
-            xp.select(
-                [signal.convolve2d(icells, self._n,
-                                   mode = 'same', boundary = 'wrap') != 0],
-                [xp.asanyarray(1 << REG_N)],
-                default = 0) +
-            # E
-            xp.select(
-                [signal.convolve2d(icells, self._e,
-                                   mode = 'same', boundary = 'wrap') != 0],
-                [xp.asanyarray(1 << REG_E)],
-                default = 0) +
-            # W
-            xp.select(
-                [signal.convolve2d(icells, self._w,
-                                   mode = 'same', boundary = 'wrap') != 0],
-                [xp.asanyarray(1 << REG_W)],
-                default = 0) +
-            # S
-            xp.select(
-                [signal.convolve2d(icells, self._s,
-                                   mode = 'same', boundary = 'wrap') != 0],
-                [xp.asanyarray(1 << REG_S)],
-                default = 0) +
-            # C
-            xp.select(
-                [self._cells],
-                [xp.asanyarray(1 << REG_C)],
-                default = 0))
+        # C
+        r = self._cells.astype(xp.uint16) << REG_C
+        # N
+        r += signal.convolve2d(self._cells.astype(xp.uint16), N,
+                               mode = 'same', boundary = 'wrap') << REG_N
+        # E
+        r += signal.convolve2d(self._cells.astype(xp.uint16), E,
+                               mode = 'same', boundary = 'wrap') << REG_E
+        # W
+        r += signal.convolve2d(self._cells.astype(xp.uint16), W,
+                               mode = 'same', boundary = 'wrap') << REG_W
+        # S
+        r += signal.convolve2d(self._cells.astype(xp.uint16), S,
+                               mode = 'same', boundary = 'wrap') << REG_S
         #
-        r = xp.left_shift(xp.asanyarray(xp.int64(1)), r)
+        s = xp.left_shift(xp.asanyarray(xp.uint32(1)), r)
         self._cells = xp.select(
-            [(r & self._rule) != 0],
-            [xp.asanyarray(xp.bool_(True))],
-            default = xp.bool_(False))
+            [(s & self._rule) != 0],
+            [xp.asanyarray(xp.uint8(1))],
+            default = xp.uint8(0))
     def entropy(self) -> float:
         mask = xp.array([
             [1, 1, 1],
             [1, 1, 1],
-            [1, 1, 1]], dtype = xp.uint64)
-        icells = xp.select([self._cells], [xp.asarray(1)], default = 0)
+            [1, 1, 1]], dtype = xp.uint8)
         p_one : float = xp.select([signal.convolve2d(
-            icells, mask,
+            self._cells, mask,
             mode = 'same', boundary = 'wrap') != 0],
                           [xp.asanyarray(1)], default = 0).sum() / (self._height * self._width)
         p_zero = 1.0 - p_one
@@ -137,23 +134,22 @@ class Field(object):
         except:
             return 0.0
     def sticky_rate(self) -> float:
-        icells = xp.select([self._cells], [xp.asarray(1)], default = 0)
         r_n: float = ((signal.convolve2d(
-            icells, self._n,
-            mode = 'same', boundary = 'wrap') - icells) ** 2).sum() / (self._height * self._width)
+            self._cells, N,
+            mode = 'same', boundary = 'wrap') - self._cells) ** 2).sum() / (self._height * self._width)
         r_e: float = ((signal.convolve2d(
-            icells, self._e,
-            mode = 'same', boundary = 'wrap') - icells) ** 2).sum() / (self._height * self._width)
+            self._cells, E,
+            mode = 'same', boundary = 'wrap') - self._cells) ** 2).sum() / (self._height * self._width)
         r_w: float = ((signal.convolve2d(
-            icells, self._w,
-            mode = 'same', boundary = 'wrap') - icells) ** 2).sum() / (self._height * self._width)
+            self._cells, W,
+            mode = 'same', boundary = 'wrap') - self._cells) ** 2).sum() / (self._height * self._width)
         r_s: float = ((signal.convolve2d(
-            icells, self._s,
-            mode = 'same', boundary = 'wrap') - icells) ** 2).sum() / (self._height * self._width)
+            self._cells, S,
+            mode = 'same', boundary = 'wrap') - self._cells) ** 2).sum() / (self._height * self._width)
         r_c: float = xp.select(
             [self._prev_cells == self._cells],
-            [xp.asanyarray(xp.uint64(1))],
-            default = xp.uint64(0)).sum() / (self._height * self._width)
+            [xp.asanyarray(xp.uint32(1))],
+            default = xp.uint32(0)).sum() / (self._height * self._width)
         return r_n * r_e * r_w * r_s * r_c
 
 class AnimationGIF(object):
